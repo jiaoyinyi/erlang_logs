@@ -1,0 +1,15 @@
+{application, logs,
+ [{description, "running logger"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {mod, {logs_app, []}},
+  {applications,
+   [kernel,
+    stdlib
+   ]},
+  {env,[]},
+  {modules, []},
+
+  {licenses, ["Apache 2.0"]},
+  {links, []}
+ ]}.
