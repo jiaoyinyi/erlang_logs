@@ -8,14 +8,15 @@
 %%%-------------------------------------------------------------------
 -author("huangzaoyi").
 
--define(debug(Format, Args), logs_lib:log(debug, ?MODULE, ?FUNCTION_NAME, ?LINE, Format, Args)).
--define(debug(Str), logs_lib:log(debug, ?MODULE, ?FUNCTION_NAME, ?LINE, "~ts", [Str])).
 
--define(info(Format, Args), logs_lib:log(info, ?MODULE, ?FUNCTION_NAME, ?LINE, Format, Args)).
--define(info(Str), logs_lib:log(info, ?MODULE, ?FUNCTION_NAME, ?LINE, "~ts", [Str])).
+-define(debug(Format, Args), begin case logs:can_log(debug) of true -> logs:log(debug, ?MODULE, ?FUNCTION_NAME, ?LINE, io_lib:format(Format, Args)); _ -> ok end end).
+-define(debug(Str), begin case logs:can_log(debug) of true -> logs:log(debug, ?MODULE, ?FUNCTION_NAME, ?LINE, io_lib:format(Str, [])); _ -> ok end end).
 
--define(warn(Format, Args), logs_lib:log(warn, ?MODULE, ?FUNCTION_NAME, ?LINE, Format, Args)).
--define(warn(Str), logs_lib:log(warn, ?MODULE, ?FUNCTION_NAME, ?LINE, "~ts", [Str])).
+-define(info(Format, Args), begin case logs:can_log(info) of true -> logs:log(info, ?MODULE, ?FUNCTION_NAME, ?LINE, io_lib:format(Format, Args)); _ -> ok end end).
+-define(info(Str), begin case logs:can_log(info) of true -> logs:log(info, ?MODULE, ?FUNCTION_NAME, ?LINE, io_lib:format(Str, [])); _ -> ok end end).
 
--define(error(Format, Args), logs_lib:log(error, ?MODULE, ?FUNCTION_NAME, ?LINE, Format, Args)).
--define(error(Str), logs_lib:log(error, ?MODULE, ?FUNCTION_NAME, ?LINE, "~ts", [Str])).
+-define(warn(Format, Args), begin case logs:can_log(warn) of true -> logs:log(warn, ?MODULE, ?FUNCTION_NAME, ?LINE, io_lib:format(Format, Args)); _ -> ok end end).
+-define(warn(Str), begin case logs:can_log(warn) of true -> logs:log(warn, ?MODULE, ?FUNCTION_NAME, ?LINE, io_lib:format(Str, [])); _ -> ok end end).
+
+-define(error(Format, Args), begin case logs:can_log(warn) of true -> logs:log(error, ?MODULE, ?FUNCTION_NAME, ?LINE, io_lib:format(Format, Args)); _ -> ok end end).
+-define(error(Str), begin case logs:can_log(warn) of true -> logs:log(error, ?MODULE, ?FUNCTION_NAME, ?LINE, io_lib:format(Str, [])); _ -> ok end end).

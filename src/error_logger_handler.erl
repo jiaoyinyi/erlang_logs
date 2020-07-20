@@ -89,7 +89,7 @@ format_term_list([]) ->
 string_p([]) ->
     false;
 string_p(FlatList) ->
-    io_lib:printable_list(FlatList).
+    io_lib:printable_unicode_list(FlatList).
 
 
 format_body([{Format, Args} | T]) ->

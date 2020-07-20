@@ -12,6 +12,10 @@
 -behaviour(gen_server).
 
 %% API
+-export([
+    log/5,
+    can_log/1
+]).
 -export([start_link/0, call/1, cast/1, info/1]).
 
 %% gen_server callbacks
@@ -22,16 +26,28 @@
     terminate/2,
     code_change/3]).
 
--include("common.hrl").
 -include("logs.hrl").
 
 -record(state, {
-    level     %% 等级
-    , fd       %% 日志文件
+    fds       %% 日志文件列表
 }).
 
+-define(log_dir, "log"). %% 日志目录
+-define(log_levels, [debug, info, warn, error]). %% 所有日志等级
+
+%% @doc 写日志接口
+-spec log(debug|info|warn|error, module(), atom(), pos_integer(), string()) -> ok.
+log(Flag, Mod, Func, Line, Str) ->
+    logs:info({log, Flag, Mod, Func, Line, Str}),
+    ok.
+
+%% @doc 判断是否可以写日志
+-spec can_log(debug|info|warn|error) -> boolean().
+can_log(Level) ->
+    get_level(get_level()) =< get_level(Level).
+
 call(Call) ->
-    ?scall(?MODULE, Call).
+    gen_server:call(?MODULE, Call).
 
 cast(Cast) ->
     gen_server:cast(?MODULE, Cast).
@@ -43,16 +59,15 @@ start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
 init([]) ->
-    ?info("开始启动:~w", [?MODULE]),
     process_flag(trap_exit, true),
-    Level = config:get(log_level, error),
-    Fd = get_log_file(),
-
-    Diff = time_lib:next_diff({0, 0, 0}),
-    misc_lib:set_timer(zero_flush_timer, Diff, zero_flush),
+    ets:new(logs_ets, [named_table, set, {keypos, 1}]),
+    Level = get_init_level(),
+    ets:insert(logs_ets, {logs_level, Level}),
+    Fds = get_log_files(),
     error_logger:add_report_handler(error_logger_handler),
-    ?info("启动成功:~w", [?MODULE]),
-    {ok, #state{level = Level, fd = Fd}}.
+    Diff = next_diff(),
+    erlang:send_after(Diff * 1000, self(), zero_flush),
+    {ok, #state{fds = Fds}}.
 
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
@@ -68,48 +83,122 @@ handle_info(_Info, State) ->
             {noreply, State}
     end.
 
-terminate(_Reason, _State = #state{fd = Fd}) ->
+terminate(_Reason, _State = #state{fds = Fds}) ->
     catch error_logger:delete_report_handler(error_logger_handler),
-    catch do_log(lists:reverse(misc_lib:get(log_list, [])), Fd, calendar:local_time(), node()),
+    case erase(log_list) of
+        LogList = [_|_] ->
+            catch do_log(lists:reverse(LogList), Fds);
+        _ ->
+            ok
+    end,
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
+%% 接收到写日志消息，延时写
+do_handle_info({log, Flag, Mod, Func, Line, Str}, State) ->
+    LogList = case get(log_list) of undefined -> []; LogList0 -> LogList0 end,
+    put(log_list, [{Flag, Mod, Func, Line, Str, calendar:local_time(), node()} | LogList]),
+    case get(log_timer) of
+        Ref when is_reference(Ref) ->
+            ok;
+        _ ->
+            Ref = erlang:send_after(100, self(), do_log),
+            put(log_timer, Ref)
+    end,
+    {noreply, State};
 
-do_handle_info({log, Flag, Mod, Func, Line, Format, Args}, State = #state{level = Level}) when Flag == debug orelse Flag == info orelse Flag == warn orelse Flag == error ->
-    case get_level(Flag) >= get_level(Level) of
-        true ->
-            put(log_list, [{Flag, Mod, Func, Line, Format, Args} | misc_lib:get(log_list, [])]),
-            case misc_lib:has_timer(log_timer) of
-                true ->
-                    ok;
-                _ ->
-                    misc_lib:set_ms_timer(log_timer, 100, do_log)
-            end;
+%% 写日志
+do_handle_info(do_log, State = #state{fds = Fds}) ->
+    LogList = case get(log_list) of undefined -> []; LogList0 -> LogList0 end,
+    List = lists:reverse(LogList),
+    Logs = lists:sublist(List, 50),
+    do_log(Logs, Fds),
+    NewList = lists:reverse(List -- Logs),
+    put(log_list, NewList),
+    catch erlang:cancel_timer(erase(log_timer)),
+    case NewList == [] of
+        false -> %% 如果还有日志，延迟50ms写
+            Ref = erlang:send_after(50, self(), do_log),
+            put(log_timer, Ref);
         _ ->
             ok
     end,
     {noreply, State};
-do_handle_info(do_log, State = #state{fd = Fd}) ->
-    List = lists:reverse(misc_lib:get(log_list, [])),
-    Logs = lists:sublist(List, 50),
-    do_log(Logs, Fd, calendar:local_time(), node()),
-    NewList = lists:reverse(List -- Logs),
-    put(log_list, NewList),
-    misc_lib:unset_timer(log_timer),
-    NewList == [] orelse misc_lib:set_ms_timer(log_timer, 50, do_log),
-    {noreply, State};
 
 do_handle_info(zero_flush, State) ->
-    Fd = get_log_file(),
-    Diff = time_lib:next_diff({0, 0, 0}),
-    misc_lib:set_timer(zero_flush_timer, Diff, zero_flush),
-    NewState = State#state{fd = Fd},
+    Fds = get_log_files(),
+    Diff = next_diff(),
+    erlang:send_after(Diff * 1000, self(), zero_flush),
+    NewState = State#state{fds = Fds},
     {noreply, NewState};
 
 do_handle_info(_Info, State) ->
     {noreply, State}.
+
+get_log_files() ->
+    {ok, Cwd} = file:get_cwd(),
+    Dir = filename:join(Cwd, ?log_dir),
+    filelib:is_dir(Dir) orelse file:make_dir(Dir),
+    {Y, M, D} = erlang:date(),
+    DateStr = lists:flatten(io_lib:format("~w-~.2.0w-~.2.0w", [Y, M, D])),
+    [{Level, filename:join(Dir, atom_to_list(Level) ++ "_" ++ DateStr ++ ".log")} || Level <- ?log_levels].
+
+%% 写日志
+do_log([], _Fd) -> ok;
+do_log([{Flag, Mod, Func, Line, Str, DateTime, Node} | List], Fds) ->
+    catch write(Fds, Flag, DateTime, Node, Mod, Func, Line, Str),
+    do_log(List, Fds).
+
+%% 写日志
+write(Fds, Level, {{Y, M, D}, {H, Min, S}}, Node, Mod, Func, Line, Str) ->
+    LevelStr = get_str(Level),
+    LogStr = io_lib:format("~s ~w-~.2.0w-~.2.0w ~.2.0w:~.2.0w:~.2.0w ~p:~p:~p:~p ~ts~n", [LevelStr, Y, M, D, H, Min, S, Node, Mod, Func, Line, Str]),
+    Bin = unicode:characters_to_binary(LogStr),
+    do_write(Fds, Level, Bin).
+
+%% 写入文件
+do_write([], _Level, _Bin) ->
+    ok;
+do_write([{L, Fd}| Fds], Level, Bin) ->
+    case get_level(L) =< get_level(Level) of
+        true ->
+            catch file:write_file(Fd, Bin, [append, delayed_write]),
+            do_write(Fds, Level, Bin);
+        _ ->
+            do_write(Fds, Level, Bin)
+    end.
+
+%% 距离下一天0点的秒数
+next_diff() ->
+    Date = {{Y, M, D}, _} = calendar:local_time(),
+    NextDate = {{Y, M, D}, {24, 0, 0}},
+    {_, Time} = calendar:time_difference(Date, NextDate),
+    calendar:time_to_seconds(Time).
+
+%% 启动时获取日志等级
+get_init_level() ->
+    case application:get_env(logs, logs_level) of
+        {ok, Level} ->
+            case lists:member(Level, ?log_levels) of
+                true ->
+                    Level;
+                _ ->
+                    info
+            end;
+        _ ->
+            info
+    end.
+
+%% 获取日志等级
+get_level() ->
+    case ets:lookup(logs_ets, logs_level) of
+        [{_, Level}] ->
+            Level;
+        _ ->
+            info
+    end.
 
 get_level(debug) -> 1;
 get_level(info) -> 2;
@@ -120,38 +209,3 @@ get_str(debug) -> "[D]";
 get_str(info) -> "[I]";
 get_str(warn) -> "[W]";
 get_str(error) -> "[E]".
-
-get_log_file() ->
-    Dir = config:get(log_root),
-    filelib:is_dir(Dir) orelse file:make_dir(Dir),
-    {Y, M, D} = erlang:date(),
-    DateStr = lists:flatten(io_lib:format("~w-~.2.0w-~.2.0w", [Y, M, D])),
-    filename:join(Dir, DateStr ++ ".log").
-
-%% 写日志
-do_log([], _Fd, _DateTime, _Node) -> ok;
-do_log([{Flag, Mod, Func, Line, Format, Args} | List], Fd, DateTime, Node) ->
-    catch write(Fd, Flag, DateTime, Node, Mod, Func, Line, Format, Args),
-    do_log(List, Fd, DateTime, Node).
-
-write(Fd, Level, {{Y, M, D}, {H, Min, S}}, Node, Mod, Func, Line, [], Args) ->
-    LevelStr = get_str(Level),
-    LogStr =
-        case string_p(lists:flatten(Args)) of
-            true ->
-                io_lib:format("~s ~w-~.2.0w-~.2.0w ~.2.0w:~.2.0w:~.2.0w ~p:~p:~p:~p ~ts~n", [LevelStr, Y, M, D, H, Min, S, Node, Mod, Func, Line] ++ Args);
-            false ->
-                io_lib:format("~s ~w-~.2.0w-~.2.0w ~.2.0w:~.2.0w:~.2.0w ~p:~p:~p:~p ~w~n", [LevelStr, Y, M, D, H, Min, S, Node, Mod, Func, Line] ++ Args)
-        end,
-    Bin = unicode:characters_to_binary(LogStr, utf8),
-    file:write_file(Fd, Bin, [append, delayed_write]);
-write(Fd, Level, {{Y, M, D}, {H, Min, S}}, Node, Mod, Func, Line, Format, Args) ->
-    LevelStr = get_str(Level),
-    LogStr = io_lib:format("~s ~w-~.2.0w-~.2.0w ~.2.0w:~.2.0w:~.2.0w ~p:~p:~p:~p " ++ Format ++ "~n", [LevelStr, Y, M, D, H, Min, S, Node, Mod, Func, Line] ++ Args),
-    Bin = unicode:characters_to_binary(LogStr, utf8),
-    file:write_file(Fd, Bin, [append, delayed_write]).
-
-string_p([]) ->
-    false;
-string_p(FlatList) ->
-    io_lib:printable_list(FlatList).

@@ -17,10 +17,19 @@ start_link() ->
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
 init([]) ->
-    SupFlags = #{strategy => one_for_one,
-                 intensity => 0,
-                 period => 1},
-    ChildSpecs = [],
+    SupFlags =
+        #{
+            strategy => one_for_one,
+            intensity => 10,
+            period => 10
+        },
+    ChildSpecs = [
+        #{
+            id => logs,
+            start => {logs, start_link, []},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker
+        }
+    ],
     {ok, {SupFlags, ChildSpecs}}.
-
-%% internal functions
