@@ -13,8 +13,7 @@
 
 %% API
 -export([
-    log/5,
-    can_log/1
+    log/5
 ]).
 -export([start_link/0, call/1, cast/1, info/1]).
 
@@ -25,8 +24,6 @@
     handle_info/2,
     terminate/2,
     code_change/3]).
-
--include("logs.hrl").
 
 -record(state, {
     fds       %% 日志文件列表
@@ -40,11 +37,6 @@
 log(Flag, Mod, Func, Line, Str) ->
     logs:info({log, Flag, Mod, Func, Line, Str}),
     ok.
-
-%% @doc 判断是否可以写日志
--spec can_log(debug|info|warn|error) -> boolean().
-can_log(Level) ->
-    get_level(get_level()) =< get_level(Level).
 
 call(Call) ->
     gen_server:call(?MODULE, Call).
@@ -60,9 +52,6 @@ start_link() ->
 
 init([]) ->
     process_flag(trap_exit, true),
-    ets:new(logs_ets, [named_table, set, {keypos, 1}]),
-    Level = get_init_level(),
-    ets:insert(logs_ets, {logs_level, Level}),
     Fds = get_log_files(),
     error_logger:add_report_handler(error_logger_handler),
     Diff = next_diff(),
@@ -142,7 +131,7 @@ get_log_files() ->
     Dir = filename:join(Cwd, ?log_dir),
     filelib:is_dir(Dir) orelse file:make_dir(Dir),
     {Y, M, D} = erlang:date(),
-    DateStr = lists:flatten(io_lib:format("~w-~.2.0w-~.2.0w", [Y, M, D])),
+    DateStr = lists:flatten(io_lib:format("~w_~.2.0w_~.2.0w", [Y, M, D])),
     [{Level, filename:join(Dir, atom_to_list(Level) ++ "_" ++ DateStr ++ ".log")} || Level <- ?log_levels].
 
 %% 写日志
@@ -176,29 +165,6 @@ next_diff() ->
     NextDate = {{Y, M, D}, {24, 0, 0}},
     {_, Time} = calendar:time_difference(Date, NextDate),
     calendar:time_to_seconds(Time).
-
-%% 启动时获取日志等级
-get_init_level() ->
-    case application:get_env(logs, logs_level) of
-        {ok, Level} ->
-            case lists:member(Level, ?log_levels) of
-                true ->
-                    Level;
-                _ ->
-                    info
-            end;
-        _ ->
-            info
-    end.
-
-%% 获取日志等级
-get_level() ->
-    case ets:lookup(logs_ets, logs_level) of
-        [{_, Level}] ->
-            Level;
-        _ ->
-            info
-    end.
 
 get_level(debug) -> 1;
 get_level(info) -> 2;

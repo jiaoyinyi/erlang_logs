@@ -7,9 +7,6 @@
    [kernel,
     stdlib
    ]},
-  {env,[
-   {logs_level, debug}
-  ]},
   {modules, []},
 
   {licenses, ["Apache 2.0"]},
