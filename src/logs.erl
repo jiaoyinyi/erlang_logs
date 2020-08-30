@@ -13,7 +13,8 @@
 
 %% API
 -export([
-    log/5
+    log/5,
+    get_level/1
 ]).
 -export([start_link/0, call/1, cast/1, info/1]).
 
