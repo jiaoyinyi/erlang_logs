@@ -27,7 +27,7 @@
     code_change/3]).
 
 -record(state, {
-    fds       %% 日志文件列表
+    fd       %% 日志文件名
 }).
 
 -define(log_dir, "log"). %% 日志目录
@@ -53,11 +53,11 @@ start_link() ->
 
 init([]) ->
     process_flag(trap_exit, true),
-    Fds = get_log_files(),
+    Fd = get_log_file(),
     error_logger:add_report_handler(error_logger_handler),
     Diff = next_diff(),
     erlang:send_after(Diff * 1000, self(), zero_flush),
-    {ok, #state{fds = Fds}}.
+    {ok, #state{fd = Fd}}.
 
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
@@ -73,11 +73,11 @@ handle_info(_Info, State) ->
             {noreply, State}
     end.
 
-terminate(_Reason, _State = #state{fds = Fds}) ->
+terminate(_Reason, _State = #state{fd = Fd}) ->
     catch error_logger:delete_report_handler(error_logger_handler),
     case erase(log_list) of
         LogList = [_|_] ->
-            catch do_log(lists:reverse(LogList), Fds);
+            catch do_log(lists:reverse(LogList), Fd);
         _ ->
             ok
     end,
@@ -94,23 +94,22 @@ do_handle_info({log, Flag, Mod, Func, Line, Str}, State) ->
         Ref when is_reference(Ref) ->
             ok;
         _ ->
-            Ref = erlang:send_after(100, self(), do_log),
+            Ref = erlang:send_after(500, self(), do_log),
             put(log_timer, Ref)
     end,
     {noreply, State};
 
 %% 写日志
-do_handle_info(do_log, State = #state{fds = Fds}) ->
+do_handle_info(do_log, State = #state{fd = Fd}) ->
     LogList = case get(log_list) of undefined -> []; LogList0 -> LogList0 end,
     List = lists:reverse(LogList),
-    Logs = lists:sublist(List, 50),
-    do_log(Logs, Fds),
-    NewList = lists:reverse(List -- Logs),
-    put(log_list, NewList),
+    {Logs, NewList} = split(50, List),
+    do_log(Logs, Fd),
+    put(log_list, lists:reverse(NewList)),
     catch erlang:cancel_timer(erase(log_timer)),
     case NewList == [] of
-        false -> %% 如果还有日志，延迟50ms写
-            Ref = erlang:send_after(50, self(), do_log),
+        false -> %% 如果还有日志，延迟200ms写
+            Ref = erlang:send_after(200, self(), do_log),
             put(log_timer, Ref);
         _ ->
             ok
@@ -118,47 +117,40 @@ do_handle_info(do_log, State = #state{fds = Fds}) ->
     {noreply, State};
 
 do_handle_info(zero_flush, State) ->
-    Fds = get_log_files(),
+    Fd = get_log_file(),
     Diff = next_diff(),
     erlang:send_after(Diff * 1000, self(), zero_flush),
-    NewState = State#state{fds = Fds},
+    NewState = State#state{fd = Fd},
     {noreply, NewState};
 
 do_handle_info(_Info, State) ->
     {noreply, State}.
 
-get_log_files() ->
+get_log_file() ->
     {ok, Cwd} = file:get_cwd(),
     Dir = filename:join(Cwd, ?log_dir),
     filelib:is_dir(Dir) orelse file:make_dir(Dir),
     {Y, M, D} = erlang:date(),
-    DateStr = lists:flatten(io_lib:format("~w_~.2.0w_~.2.0w", [Y, M, D])),
-    [{Level, filename:join(Dir, atom_to_list(Level) ++ "_" ++ DateStr ++ ".log")} || Level <- ?log_levels].
+    DateStr = lists:flatten(io_lib:format("~w-~.2.0w-~.2.0w", [Y, M, D])),
+    filename:join(Dir, DateStr ++ ".log").
 
 %% 写日志
 do_log([], _Fd) -> ok;
-do_log([{Flag, Mod, Func, Line, Str, DateTime, Node} | List], Fds) ->
-    catch write(Fds, Flag, DateTime, Node, Mod, Func, Line, Str),
-    do_log(List, Fds).
+do_log([{Flag, Mod, Func, Line, Str, DateTime, Node} | List], Fd) ->
+    catch write(Fd, Flag, DateTime, Node, Mod, Func, Line, Str),
+    do_log(List, Fd).
 
 %% 写日志
-write(Fds, Level, {{Y, M, D}, {H, Min, S}}, Node, Mod, Func, Line, Str) ->
+write(Fd, Level, {{Y, M, D}, {H, Min, S}}, Node, Mod, Func, Line, Str) ->
     LevelStr = get_str(Level),
     LogStr = io_lib:format("~s ~w-~.2.0w-~.2.0w ~.2.0w:~.2.0w:~.2.0w ~p:~p:~p:~p ~ts~n", [LevelStr, Y, M, D, H, Min, S, Node, Mod, Func, Line, Str]),
     Bin = unicode:characters_to_binary(LogStr),
-    do_write(Fds, Level, Bin).
+    do_write(Fd, Bin).
 
 %% 写入文件
-do_write([], _Level, _Bin) ->
-    ok;
-do_write([{L, Fd}| Fds], Level, Bin) ->
-    case get_level(L) =< get_level(Level) of
-        true ->
-            catch file:write_file(Fd, Bin, [append, delayed_write]),
-            do_write(Fds, Level, Bin);
-        _ ->
-            do_write(Fds, Level, Bin)
-    end.
+do_write(Fd, Bin) ->
+    catch file:write_file(Fd, Bin, [append, delayed_write]),
+    ok.
 
 %% 距离下一天0点的秒数
 next_diff() ->
@@ -176,3 +168,14 @@ get_str(debug) -> "[D]";
 get_str(info) -> "[I]";
 get_str(warn) -> "[W]";
 get_str(error) -> "[E]".
+
+split(N, []) when is_integer(N) ->
+    {[], []};
+split(N, List) when is_integer(N) andalso is_list(List) ->
+    split(N, List, []).
+split(_N, [], Acc) ->
+    {lists:reverse(Acc), []};
+split(N, [I | List], Acc) when is_integer(N) andalso N > 0 ->
+    split(N - 1, List, [I | Acc]);
+split(_N, List, Acc) ->
+    {lists:reverse(Acc), List}.
