@@ -94,7 +94,7 @@ do_handle_info({log, Flag, Mod, Func, Line, Str}, State) ->
         Ref when is_reference(Ref) ->
             ok;
         _ ->
-            Ref = erlang:send_after(500, self(), do_log),
+            Ref = erlang:send_after(300, self(), do_log),
             put(log_timer, Ref)
     end,
     {noreply, State};
@@ -103,13 +103,13 @@ do_handle_info({log, Flag, Mod, Func, Line, Str}, State) ->
 do_handle_info(do_log, State = #state{fd = Fd}) ->
     LogList = case get(log_list) of undefined -> []; LogList0 -> LogList0 end,
     List = lists:reverse(LogList),
-    {Logs, NewList} = split(50, List),
+    {Logs, NewList} = split(30, List),
     do_log(Logs, Fd),
     put(log_list, lists:reverse(NewList)),
     catch erlang:cancel_timer(erase(log_timer)),
     case NewList == [] of
-        false -> %% 如果还有日志，延迟200ms写
-            Ref = erlang:send_after(200, self(), do_log),
+        false -> %% 如果还有日志，延迟100ms写
+            Ref = erlang:send_after(100, self(), do_log),
             put(log_timer, Ref);
         _ ->
             ok
