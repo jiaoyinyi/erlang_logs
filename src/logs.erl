@@ -119,7 +119,7 @@ do_handle_info(do_log, State = #state{fd = Fd}) ->
 do_handle_info(zero_flush, State) ->
     Fd = get_log_file(),
     Diff = next_diff(),
-    erlang:send_after(Diff * 1000, self(), zero_flush),
+    erlang:send_after(max(1, Diff * 1000), self(), zero_flush),
     NewState = State#state{fd = Fd},
     {noreply, NewState};
 
@@ -147,17 +147,16 @@ write(Fd, Level, {{Y, M, D}, {H, Min, S}}, Node, Mod, Func, Line, Str) ->
     Bin = unicode:characters_to_binary(LogStr),
     do_write(Fd, Bin).
 
-%% 写入文件
+%% 写入
 do_write(Fd, Bin) ->
+    catch io:format("~ts", [Bin]),
     catch file:write_file(Fd, Bin, [append, delayed_write]),
     ok.
 
 %% 距离下一天0点的秒数
 next_diff() ->
-    Date = {{Y, M, D}, _} = calendar:local_time(),
-    NextDate = {{Y, M, D}, {24, 0, 0}},
-    {_, Time} = calendar:time_difference(Date, NextDate),
-    calendar:time_to_seconds(Time).
+    Time = erlang:time(),
+    86400 - calendar:time_to_seconds(Time).
 
 get_level(debug) -> 1;
 get_level(info) -> 2;
