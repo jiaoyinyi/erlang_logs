@@ -149,10 +149,7 @@ write(Fd, Level, {{Y, M, D}, {H, Min, S}}, Node, Mod, Func, Line, Str) ->
 
 %% 写入
 do_write(Fd, Bin) ->
-    case catch io:format("~ts", [Bin]) of
-        Ret ->
-            io:format("~p~n", [Ret])
-    end,
+    catch io:format("~ts", [Bin]),
     catch file:write_file(Fd, Bin, [append, delayed_write]),
     ok.
 
