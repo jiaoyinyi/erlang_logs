@@ -36,7 +36,7 @@
 %% @doc 写日志接口
 -spec log(debug|info|warn|error, module(), atom(), pos_integer(), string()) -> ok.
 log(Flag, Mod, Func, Line, Str) ->
-    logs:info({log, Flag, Mod, Func, Line, Str}),
+    logs:info({log, Flag, Mod, Func, Line, Str, self()}),
     ok.
 
 call(Call) ->
@@ -87,9 +87,9 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 %% 接收到写日志消息，延时写
-do_handle_info({log, Flag, Mod, Func, Line, Str}, State) ->
+do_handle_info({log, Flag, Mod, Func, Line, Str, Pid}, State) ->
     LogList = case get(log_list) of undefined -> []; LogList0 -> LogList0 end,
-    put(log_list, [{Flag, Mod, Func, Line, Str, calendar:local_time(), node()} | LogList]),
+    put(log_list, [{Flag, Mod, Func, Line, Str, calendar:local_time(), node(), Pid} | LogList]),
     case get(log_timer) of
         Ref when is_reference(Ref) ->
             ok;
@@ -136,14 +136,14 @@ get_log_file() ->
 
 %% 写日志
 do_log([], _Fd) -> ok;
-do_log([{Flag, Mod, Func, Line, Str, DateTime, Node} | List], Fd) ->
-    catch write(Fd, Flag, DateTime, Node, Mod, Func, Line, Str),
+do_log([{Flag, Mod, Func, Line, Str, DateTime, Node, Pid} | List], Fd) ->
+    catch write(Fd, Flag, DateTime, Node, Pid, Mod, Func, Line, Str),
     do_log(List, Fd).
 
 %% 写日志
-write(Fd, Level, {{Y, M, D}, {H, Min, S}}, Node, Mod, Func, Line, Str) ->
+write(Fd, Level, {{Y, M, D}, {H, Min, S}}, Node, Pid, Mod, Func, Line, Str) ->
     LevelStr = get_str(Level),
-    LogStr = io_lib:format("~s ~w-~.2.0w-~.2.0w ~.2.0w:~.2.0w:~.2.0w ~p:~p:~p:~p ~ts~n", [LevelStr, Y, M, D, H, Min, S, Node, Mod, Func, Line, Str]),
+    LogStr = io_lib:format("~s ~w-~.2.0w-~.2.0w ~.2.0w:~.2.0w:~.2.0w ~p ~p ~p:~p:~p ~ts~n", [LevelStr, Y, M, D, H, Min, S, Node, Pid, Mod, Func, Line, Str]),
     Bin = unicode:characters_to_binary(LogStr),
     do_write(Fd, Bin).
 
