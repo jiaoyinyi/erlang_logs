@@ -28,7 +28,7 @@ init([]) ->
             id => logs,
             start => {logs, start_link, []},
             restart => permanent,
-            shutdown => 300000,
+            shutdown => 18000000,
             type => worker
         }
     ],
