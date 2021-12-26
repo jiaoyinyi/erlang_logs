@@ -107,7 +107,7 @@ do_handle_info({log, Flag, Mod, Func, Line, Str, Time, Node, Pid}, State) ->
 do_handle_info(do_log, State = #state{fd = Fd}) ->
     LogList = case get(log_list) of undefined -> []; LogList0 -> LogList0 end,
     List = lists:reverse(LogList),
-    {Logs, NewList} = split(30, List),
+    {Logs, NewList} = split(60, List),
     do_log(Logs, Fd),
     put(log_list, lists:reverse(NewList)),
     catch erlang:cancel_timer(erase(log_timer)),
