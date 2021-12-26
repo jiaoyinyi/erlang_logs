@@ -36,7 +36,7 @@
 %% @doc 写日志接口
 -spec log(debug|info|warn|error, module(), atom(), pos_integer(), string()) -> ok.
 log(Flag, Mod, Func, Line, Str) ->
-    logs:info({log, Flag, Mod, Func, Line, Str, self()}),
+    logs:info({log, Flag, Mod, Func, Line, Str, calendar:local_time(), node(), self()}),
     ok.
 
 call(Call) ->
@@ -57,6 +57,7 @@ init([]) ->
     error_logger:add_report_handler(error_logger_handler),
     Diff = next_diff(),
     erlang:send_after(Diff * 1000, self(), zero_flush),
+    erlang:send_after(18000000, self(), hibernate),
     {ok, #state{fd = Fd}}.
 
 handle_call(_Request, _From, State) ->
@@ -69,6 +70,8 @@ handle_info(_Info, State) ->
     case catch do_handle_info(_Info, State) of
         {noreply, NewState} ->
             {noreply, NewState};
+        {noreply, NewState, Timeout} ->
+            {noreply, NewState, Timeout};
         _Err ->
             {noreply, State}
     end.
@@ -87,9 +90,9 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 %% 接收到写日志消息，延时写
-do_handle_info({log, Flag, Mod, Func, Line, Str, Pid}, State) ->
+do_handle_info({log, Flag, Mod, Func, Line, Str, Time, Node, Pid}, State) ->
     LogList = case get(log_list) of undefined -> []; LogList0 -> LogList0 end,
-    put(log_list, [{Flag, Mod, Func, Line, Str, calendar:local_time(), node(), Pid} | LogList]),
+    put(log_list, [{Flag, Mod, Func, Line, Str, Time, Node, Pid} | LogList]),
     case get(log_timer) of
         Ref when is_reference(Ref) ->
             ok;
@@ -122,6 +125,10 @@ do_handle_info(zero_flush, State) ->
     erlang:send_after(max(1, Diff * 1000), self(), zero_flush),
     NewState = State#state{fd = Fd},
     {noreply, NewState};
+
+do_handle_info(hibernate, State) ->
+    erlang:send_after(18000000, self(), hibernate),
+    {noreply, State, hibernate};
 
 do_handle_info(_Info, State) ->
     {noreply, State}.
