@@ -53,7 +53,7 @@ start_link() ->
 
 init([]) ->
     process_flag(trap_exit, true),
-    Fd = get_log_file(),
+    {ok, Fd} = get_log_file(),
     error_logger:add_report_handler(error_logger_handler),
     Diff = next_diff(),
     erlang:send_after(Diff * 1000, self(), zero_flush),
@@ -79,11 +79,12 @@ handle_info(_Info, State) ->
 terminate(_Reason, _State = #state{fd = Fd}) ->
     catch error_logger:delete_report_handler(error_logger_handler),
     case erase(log_list) of
-        LogList = [_|_] ->
+        LogList = [_ | _] ->
             catch do_log(lists:reverse(LogList), Fd);
         _ ->
             ok
     end,
+    file:close(Fd),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -119,11 +120,18 @@ do_handle_info(do_log, State = #state{fd = Fd}) ->
     end,
     {noreply, State};
 
-do_handle_info(zero_flush, State) ->
-    Fd = get_log_file(),
+do_handle_info(zero_flush, State = #state{fd = Fd}) ->
+    NewFd =
+        case get_log_file() of
+            {ok, NewFd0} ->
+                file:close(Fd),
+                NewFd0;
+            _ ->
+                Fd
+        end,
     Diff = next_diff(),
     erlang:send_after(max(1, Diff * 1000), self(), zero_flush),
-    NewState = State#state{fd = Fd},
+    NewState = State#state{fd = NewFd},
     {noreply, NewState};
 
 do_handle_info(hibernate, State) ->
@@ -139,7 +147,8 @@ get_log_file() ->
     filelib:is_dir(Dir) orelse file:make_dir(Dir),
     {Y, M, D} = erlang:date(),
     DateStr = lists:flatten(io_lib:format("~w-~.2.0w-~.2.0w", [Y, M, D])),
-    filename:join(Dir, DateStr ++ ".log").
+    FileName = filename:join(Dir, DateStr ++ ".log"),
+    file:open(FileName, [append, delayed_write, binary]).
 
 %% 写日志
 do_log([], _Fd) -> ok;
@@ -157,7 +166,7 @@ write(Fd, Level, {{Y, M, D}, {H, Min, S}}, Node, Pid, Mod, Func, Line, Str) ->
 %% 写入
 do_write(Fd, Bin) ->
     catch io:format("~ts", [Bin]),
-    catch file:write_file(Fd, Bin, [append, delayed_write]),
+    catch file:write(Fd, Bin),
     ok.
 
 %% 距离下一天0点的秒数
