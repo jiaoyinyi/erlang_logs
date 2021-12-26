@@ -57,7 +57,7 @@ init([]) ->
     error_logger:add_report_handler(error_logger_handler),
     Diff = next_diff(),
     erlang:send_after(Diff * 1000, self(), zero_flush),
-    erlang:send_after(18000000, self(), hibernate),
+    erlang:send_after(300000, self(), hibernate),
     {ok, #state{fd = Fd}}.
 
 handle_call(_Request, _From, State) ->
@@ -135,7 +135,7 @@ do_handle_info(zero_flush, State = #state{fd = Fd}) ->
     {noreply, NewState};
 
 do_handle_info(hibernate, State) ->
-    erlang:send_after(18000000, self(), hibernate),
+    erlang:send_after(300000, self(), hibernate),
     {noreply, State, hibernate};
 
 do_handle_info(_Info, State) ->
